@@ -157,6 +157,15 @@ func (v *targetGroupBindingValidator) checkImmutableFields(tgb *elbv2api.TargetG
 	if tgb.Spec.TargetGroupARN != oldTGB.Spec.TargetGroupARN {
 		changedImmutableFields = append(changedImmutableFields, "spec.targetGroupARN")
 	}
+	if tgb.Spec.TargetGroupName != oldTGB.Spec.TargetGroupName {
+		changedImmutableFields = append(changedImmutableFields, "spec.targetGroupName")
+	}
+	if (oldTGB.Spec.TargetGroupARN != "" && oldTGB.Spec.TargetGroupName == "" && 
+		tgb.Spec.TargetGroupARN == "" && tgb.Spec.TargetGroupName != "") || 
+		(oldTGB.Spec.TargetGroupARN == "" && oldTGB.Spec.TargetGroupName != "" && 
+		tgb.Spec.TargetGroupARN != "" && tgb.Spec.TargetGroupName == "") {
+		changedImmutableFields = append(changedImmutableFields, "cannot switch between targetGroupARN and targetGroupName")
+	}
 	if (tgb.Spec.TargetType == nil) != (oldTGB.Spec.TargetType == nil) {
 		changedImmutableFields = append(changedImmutableFields, "spec.targetType")
 	}
