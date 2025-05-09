@@ -364,6 +364,31 @@ func (m *defaultResourceManager) reconcileWithInstanceTargetType(ctx context.Con
 }
 
 func (m *defaultResourceManager) cleanupTargets(ctx context.Context, tgb *elbv2api.TargetGroupBinding) error {
+	if tgb.Spec.TargetGroupARN == "" && tgb.Spec.TargetGroupName != "" {
+		req := &elbv2sdk.DescribeTargetGroupsInput{
+			Names: []string{tgb.Spec.TargetGroupName},
+		}
+		
+		clientToUse, err := m.elbv2Client.AssumeRole(ctx, tgb.Spec.IamRoleArnToAssume, tgb.Spec.AssumeRoleExternalId)
+		if err != nil {
+			return err
+		}
+		
+		tgList, err := clientToUse.DescribeTargetGroupsAsList(ctx, req)
+		if err != nil {
+			if isELBV2TargetGroupNotFoundError(err) {
+				return nil
+			}
+			return err
+		}
+		
+		if len(tgList) == 1 {
+			tgb.Spec.TargetGroupARN = *tgList[0].TargetGroupArn
+		} else {
+			return nil
+		}
+	}
+	
 	targets, err := m.targetsManager.ListTargets(ctx, tgb)
 	if err != nil {
 		if isELBV2TargetGroupNotFoundError(err) {
