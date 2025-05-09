@@ -77,7 +77,12 @@ func (m *targetGroupBindingMutator) getArnFromNameIfNeeded(ctx context.Context, 
 }
 
 func (m *targetGroupBindingMutator) MutateUpdate(ctx context.Context, obj runtime.Object, oldObj runtime.Object) (runtime.Object, error) {
-	return obj, nil
+	tgb := obj.(*elbv2api.TargetGroupBinding)
+	if err := m.getArnFromNameIfNeeded(ctx, tgb); err != nil {
+		m.metricsCollector.ObserveWebhookMutationError(apiPathMutateELBv2TargetGroupBinding, "getArnFromNameIfNeeded")
+		return nil, err
+	}
+	return tgb, nil
 }
 
 func (m *targetGroupBindingMutator) defaultingTargetType(ctx context.Context, tgb *elbv2api.TargetGroupBinding) error {

@@ -335,6 +335,166 @@ func Test_targetGroupBindingMutator_MutateCreate(t *testing.T) {
 	}
 }
 
+func Test_targetGroupBindingMutator_MutateUpdate(t *testing.T) {
+	type describeTargetGroupsAsListCall struct {
+		req  *elbv2sdk.DescribeTargetGroupsInput
+		resp []elbv2types.TargetGroup
+		err  error
+	}
+
+	type fields struct {
+		describeTargetGroupsAsListCalls []describeTargetGroupsAsListCall
+	}
+
+	instanceTargetType := elbv2api.TargetTypeInstance
+	targetGroupIPAddressTypeIPv4 := elbv2api.TargetGroupIPAddressTypeIPv4
+
+	type args struct {
+		obj    *elbv2api.TargetGroupBinding
+		oldObj *elbv2api.TargetGroupBinding
+	}
+	tests := []struct {
+		name       string
+		fields     fields
+		args       args
+		want       *elbv2api.TargetGroupBinding
+		wantErr    error
+		wantMetric bool
+	}{
+		{
+			name: "targetGroupBinding with TargetGroupARN unchanged",
+			fields: fields{
+				describeTargetGroupsAsListCalls: nil,
+			},
+			args: args{
+				obj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupARN: "tg-arn",
+						TargetType:     &instanceTargetType,
+						IPAddressType:  &targetGroupIPAddressTypeIPv4,
+					},
+				},
+				oldObj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupARN: "tg-arn",
+						TargetType:     &instanceTargetType,
+						IPAddressType:  &targetGroupIPAddressTypeIPv4,
+					},
+				},
+			},
+			want: &elbv2api.TargetGroupBinding{
+				Spec: elbv2api.TargetGroupBindingSpec{
+					TargetGroupARN: "tg-arn",
+					TargetType:     &instanceTargetType,
+					IPAddressType:  &targetGroupIPAddressTypeIPv4,
+				},
+			},
+		},
+		{
+			name: "targetGroupBinding with TargetGroupARN replaced by TargetGroupName",
+			fields: fields{
+				describeTargetGroupsAsListCalls: []describeTargetGroupsAsListCall{
+					{
+						req: &elbv2sdk.DescribeTargetGroupsInput{
+							Names: []string{"tg-name"},
+						},
+						resp: []elbv2types.TargetGroup{
+							{
+								TargetGroupArn:  awssdk.String("tg-arn"),
+								TargetGroupName: awssdk.String("tg-name"),
+								TargetType:      elbv2types.TargetTypeEnumInstance,
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				obj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupName: "tg-name",
+						TargetType:      &instanceTargetType,
+						IPAddressType:   &targetGroupIPAddressTypeIPv4,
+					},
+				},
+				oldObj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupARN: "tg-arn",
+						TargetType:     &instanceTargetType,
+						IPAddressType:  &targetGroupIPAddressTypeIPv4,
+					},
+				},
+			},
+			want: &elbv2api.TargetGroupBinding{
+				Spec: elbv2api.TargetGroupBindingSpec{
+					TargetGroupARN:  "tg-arn",
+					TargetGroupName: "tg-name",
+					TargetType:      &instanceTargetType,
+					IPAddressType:   &targetGroupIPAddressTypeIPv4,
+				},
+			},
+		},
+		{
+			name: "targetGroupBinding with TargetGroupName error",
+			fields: fields{
+				describeTargetGroupsAsListCalls: []describeTargetGroupsAsListCall{
+					{
+						req: &elbv2sdk.DescribeTargetGroupsInput{
+							Names: []string{"tg-name"},
+						},
+						err: errors.New("targetGroup not found"),
+					},
+				},
+			},
+			args: args{
+				obj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupName: "tg-name",
+						TargetType:      &instanceTargetType,
+						IPAddressType:   &targetGroupIPAddressTypeIPv4,
+					},
+				},
+				oldObj: &elbv2api.TargetGroupBinding{
+					Spec: elbv2api.TargetGroupBindingSpec{
+						TargetGroupARN: "tg-arn",
+						TargetType:     &instanceTargetType,
+						IPAddressType:  &targetGroupIPAddressTypeIPv4,
+					},
+				},
+			},
+			wantErr:    errors.New("targetGroup not found"),
+			wantMetric: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			elbv2Client := services.NewMockELBV2(ctrl)
+			ctx := context.Background()
+			for _, call := range tt.fields.describeTargetGroupsAsListCalls {
+				elbv2Client.EXPECT().DescribeTargetGroupsAsList(gomock.Any(), call.req).Return(call.resp, call.err).AnyTimes()
+				elbv2Client.EXPECT().AssumeRole(ctx, gomock.Any(), gomock.Any()).Return(elbv2Client, nil).AnyTimes()
+			}
+			mockMetricsCollector := lbcmetrics.NewMockCollector()
+			m := &targetGroupBindingMutator{
+				elbv2Client:      elbv2Client,
+				logger:           logr.New(&log.NullLogSink{}),
+				metricsCollector: mockMetricsCollector,
+			}
+			got, err := m.MutateUpdate(context.Background(), tt.args.obj, tt.args.oldObj)
+			if tt.wantErr != nil {
+				assert.EqualError(t, err, tt.wantErr.Error())
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+
+			mockCollector := m.metricsCollector.(*lbcmetrics.MockCollector)
+			assert.Equal(t, tt.wantMetric, len(mockCollector.Invocations[lbcmetrics.MetricWebhookMutationFailure]) == 1)
+		})
+	}
+}
+
 func Test_targetGroupBindingMutator_obtainSDKTargetTypeFromAWS(t *testing.T) {
 	type describeTargetGroupsAsListCall struct {
 		req  *elbv2sdk.DescribeTargetGroupsInput
