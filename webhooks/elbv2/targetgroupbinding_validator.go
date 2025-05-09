@@ -154,9 +154,27 @@ func (v *targetGroupBindingValidator) checkRequiredFields(ctx context.Context, t
 // checkImmutableFields will check immutable fields are not changed.
 func (v *targetGroupBindingValidator) checkImmutableFields(tgb *elbv2api.TargetGroupBinding, oldTGB *elbv2api.TargetGroupBinding) error {
 	var changedImmutableFields []string
+	
+	// Allow migration from TargetGroupARN to TargetGroupName if they refer to the same target group
 	if tgb.Spec.TargetGroupARN != oldTGB.Spec.TargetGroupARN {
-		changedImmutableFields = append(changedImmutableFields, "spec.targetGroupARN")
+		// If we're migrating from ARN to Name, verify they refer to the same target group
+		if oldTGB.Spec.TargetGroupARN != "" && tgb.Spec.TargetGroupARN == "" && tgb.Spec.TargetGroupName != "" {
+			ctx := context.Background()
+			tgObj, err := getTargetGroupsByNameFromAWS(ctx, v.elbv2Client, tgb)
+			if err != nil {
+				return errors.Wrapf(err, "failed to verify TargetGroupName refers to the same target group as previous TargetGroupARN")
+			}
+			
+			if *tgObj.TargetGroupArn != oldTGB.Spec.TargetGroupARN {
+				return errors.Errorf("TargetGroupName %s resolves to ARN %s which doesn't match previous TargetGroupARN %s", 
+					tgb.Spec.TargetGroupName, *tgObj.TargetGroupArn, oldTGB.Spec.TargetGroupARN)
+			}
+			
+		} else {
+			changedImmutableFields = append(changedImmutableFields, "spec.targetGroupARN")
+		}
 	}
+	
 	if (tgb.Spec.TargetType == nil) != (oldTGB.Spec.TargetType == nil) {
 		changedImmutableFields = append(changedImmutableFields, "spec.targetType")
 	}
